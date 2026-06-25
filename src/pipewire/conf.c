@@ -712,7 +712,7 @@ bool pw_conf_find_match(struct spa_json *arr, const struct spa_dict *props, bool
 						reg = false;
 					}
 				}
-				if (spa_json_begin_array_relax(&it[1], str, strlen(str)) > 0) {
+				if (spa_json_begin_array(&it[1], str, strlen(str)) > 0) {
 					while (spa_json_get_string(&it[1], v, sizeof(v)) > 0) {
 						if ((reg && regexec(&preg, v, 0, NULL, 0) == 0) ||
 								spa_streq(v, val)) {
@@ -981,6 +981,10 @@ static int do_exec(struct pw_context *context, char *const *argv)
 		spa_strbuf_init(&s, buf, sizeof(buf));
 		for (p = argv; *p; ++p)
 			spa_strbuf_append(&s, " '%s'", *p);
+
+#ifdef CLOSE_RANGE_UNSHARE
+		close_range(3, ~0U, CLOSE_RANGE_UNSHARE);
+#endif
 
 		pw_log_info("exec%s", s.buffer);
 		res = execvp(argv[0], argv);

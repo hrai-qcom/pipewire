@@ -69,6 +69,7 @@
 #define DEFAULT_IDLE_TIMEOUT		"0"
 #define DEFAULT_MAX_STREAMS		"64"
 #define DEFAULT_MAX_SAMPLE_CACHE	"67108864"
+#define DEFAULT_ZERORAMP_GAP		"0"
 
 #define MAX_FORMATS	32
 /* The max amount of data we send in one block when capturing. In PulseAudio this
@@ -1012,12 +1013,29 @@ static void manager_metadata(void *data, struct pw_manager_object *o,
 			else
 				client->default_bluetooth_headset_autoswitch = spa_streq(default_, "true");
 		}
+
+		if (spa_streq(key, METADATA_BLUETOOTH_PROFILE_PREFERENCE)) {
+			char default_pref[16];
+
+			client->have_bluetooth_profile_preference = true;
+
+			free(client->default_bluetooth_profile_preference);
+			if (spa_json_str_object_find(value, strlen(value),
+						"default", default_pref, sizeof(default_pref)) < 0)
+				client->default_bluetooth_profile_preference = NULL;
+			else
+				client->default_bluetooth_profile_preference = strdup(default_pref);
+		}
 	}
 	if (subject == PW_ID_CORE && o == client->metadata_sm_settings) {
 		if (spa_streq(key, METADATA_FEATURES_AUDIO_MONO))
 			client->force_mono_audio = spa_streq(value, "true");
 		if (spa_streq(key, METADATA_BLUETOOTH_HEADSET_AUTOSWITCH))
 			client->bluetooth_headset_autoswitch = spa_streq(value, "true");
+		if (spa_streq(key, METADATA_BLUETOOTH_PROFILE_PREFERENCE)) {
+			free(client->bluetooth_profile_preference);
+			client->bluetooth_profile_preference = value ? strdup(value) : NULL;
+		}
 	}
 }
 
@@ -1722,12 +1740,11 @@ static void synthesize_compress_offload_spec(struct sample_spec *ss,
 static int do_create_playback_stream(struct client *client, uint32_t command, uint32_t tag, struct message *m)
 {
 	struct impl *impl = client->impl;
-	const char *name = NULL;
+	const char *name = NULL, *sink_name, *str;
 	int res;
 	struct sample_spec ss, fix_ss;
 	struct channel_map map, fix_map;
 	uint32_t sink_index, syncid, ss_rate = 0, rate = 0;
-	const char *sink_name;
 	struct buffer_attr attr = { 0 };
 	bool corked = false,
 		no_remap = false,
@@ -2048,6 +2065,9 @@ static int do_create_playback_stream(struct client *client, uint32_t command, ui
 	if (dont_inhibit_auto_suspend)
 		pw_properties_set(props, PW_KEY_NODE_PASSIVE, "true");
 
+	if ((str = pw_properties_get(client->props, "pulse.zeroramp.gap")) != NULL)
+		pw_properties_set(props, "zeroramp.gap", str);
+
 	stream->stream = pw_stream_new(client->core, name, spa_steal_ptr(props));
 	if (stream->stream == NULL)
 		goto error_errno;
@@ -2118,12 +2138,11 @@ error:
 static int do_create_record_stream(struct client *client, uint32_t command, uint32_t tag, struct message *m)
 {
 	struct impl *impl = client->impl;
-	const char *name = NULL;
+	const char *name = NULL, *source_name;
 	int res;
 	struct sample_spec ss, fix_ss;
 	struct channel_map map, fix_map;
 	uint32_t source_index;
-	const char *source_name;
 	struct buffer_attr attr = { 0 };
 	bool corked = false,
 		no_remap = false,
@@ -3780,7 +3799,7 @@ static int fill_ext_module_info(struct client *client, struct message *m,
 	}
 	if (client->version >= 15) {
 		message_put(m,
-			TAG_PROPLIST, module->info->properties,
+			TAG_PROPLIST, module->props,
 			TAG_INVALID);
 	}
 	return 0;

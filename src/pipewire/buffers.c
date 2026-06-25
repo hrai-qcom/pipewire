@@ -18,6 +18,7 @@ PW_LOG_TOPIC_EXTERN(log_buffers);
 #define PW_LOG_TOPIC_DEFAULT log_buffers
 
 #define MAX_ALIGN	32u
+#define MAX_METAS	64u
 #define MAX_BLOCKS	256u
 
 struct port {
@@ -158,10 +159,10 @@ param_filter(struct pw_buffers *this,
 		if (in_res < 1) {
 			/* in_res == -ENOENT  : unknown parameter, assume NULL and we will
 			 *                      exit the loop below.
-			 * in_res == 0        : no data, assume NULL
+			 * in_res == 0        : no data, assume NULL when first item
 			 * in_res < 0         : some error, exit now
 			 */
-			if (in_res == 0)
+			if (in_res == 0 && iidx == 0)
 				in_res = -ENOENT;
 			if (in_res == -ENOENT)
 				iparam = NULL;
@@ -178,8 +179,6 @@ param_filter(struct pw_buffers *this,
 						id, &oidx, iparam, &oparam, result);
 
 			/* out_res < 1 : no value or error, exit now */
-			if (out_res == 0)
-				out_res = -ENOENT;
 			if (out_res < 1)
 				break;
 
@@ -252,7 +251,7 @@ int pw_buffers_negotiate(struct pw_context *context, uint32_t flags,
 	if ((res = param_filter(result, &input, &output, SPA_PARAM_Meta, &b)) > 0)
 		n_params += res;
 
-	if (n_params > 4096)
+	if (n_params > MAX_METAS)
 		return -EINVAL;
 
 	metas = alloca(sizeof(struct spa_meta) * n_params * 2);

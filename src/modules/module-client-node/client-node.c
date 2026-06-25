@@ -28,12 +28,8 @@ PW_LOG_TOPIC_EXTERN(mod_topic);
 
 /** \cond */
 
-#define MAX_BUFFERS	64
-#define MAX_METAS	16u
-#define MAX_DATAS	256u
 #define AREA_SLOT	(sizeof(struct spa_io_async_buffers))
 #define AREA_SIZE	(4096u / AREA_SLOT)
-#define MAX_AREAS	32
 
 #define CHECK_FREE_PORT(impl,d,p)	(p <= pw_map_get_size(&impl->ports[d]) && !CHECK_PORT(impl,d,p))
 #define CHECK_PORT(impl,d,p)		(pw_map_lookup(&impl->ports[d], p) != NULL)
@@ -44,8 +40,8 @@ PW_LOG_TOPIC_EXTERN(mod_topic);
 struct buffer {
 	struct spa_buffer *outbuf;
 	struct spa_buffer buffer;
-	struct spa_meta metas[MAX_METAS];
-	struct spa_data datas[MAX_DATAS];
+	struct spa_meta *metas;
+	struct spa_data *datas;
 	struct pw_memblock *mem;
 };
 
@@ -55,7 +51,7 @@ struct mix {
 	uint32_t peer_id;
 	uint32_t n_buffers;
 	uint32_t impl_mix_id;
-	struct buffer buffers[MAX_BUFFERS];
+	struct buffer *buffers;
 };
 
 struct params {
@@ -286,6 +282,8 @@ static int clear_buffers(struct impl *impl, struct mix *mix)
 		clear_buffer(impl, &b->buffer);
 		pw_memblock_unref(b->mem);
 	}
+	free(mix->buffers);
+	mix->buffers = NULL;
 	mix->n_buffers = 0;
 	return 0;
 }
@@ -780,9 +778,6 @@ do_port_use_buffers(struct impl *impl,
 	if (p == NULL)
 		return n_buffers == 0 ? 0 : -EINVAL;
 
-	if (n_buffers > MAX_BUFFERS)
-		return -ENOSPC;
-
 	pw_log_debug("%p: %s port %d.%d use buffers %p %u flags:%08x", impl,
 			direction == SPA_DIRECTION_INPUT ? "input" : "output",
 			port_id, mix_id, buffers, n_buffers, flags);
@@ -806,6 +801,34 @@ do_port_use_buffers(struct impl *impl,
 
 	if (p->destroyed)
 		return 0;
+
+	if (n_buffers > 0) {
+		size_t buffers_size = n_buffers * sizeof(struct buffer);
+		uint32_t n_datas = 0, n_metas = 0;
+		void *ptr;
+
+		/* size the data/meta pools to the buffers actually in use */
+		for (i = 0; i < n_buffers; i++) {
+			n_datas += buffers[i]->n_datas;
+			n_metas += buffers[i]->n_metas;
+		}
+
+		mix->buffers = calloc(1, buffers_size +
+				n_datas * sizeof(struct spa_data) +
+				n_metas * sizeof(struct spa_meta));
+		if (mix->buffers == NULL)
+			return -errno;
+
+		ptr = SPA_PTROFF(mix->buffers, buffers_size, void);
+		for (i = 0; i < n_buffers; i++) {
+			mix->buffers[i].datas = ptr;
+			ptr = SPA_PTROFF(ptr,
+				buffers[i]->n_datas * sizeof(struct spa_data), void);
+			mix->buffers[i].metas = ptr;
+			ptr = SPA_PTROFF(ptr,
+				buffers[i]->n_metas * sizeof(struct spa_meta), void);
+		}
+	}
 
 	for (i = 0; i < n_buffers; i++) {
 		struct buffer *b = &mix->buffers[i];
@@ -856,11 +879,11 @@ do_port_use_buffers(struct impl *impl,
 		pw_log_debug("%p: buffer %d %d %d %d", impl, i, mb[i].mem_id,
 				mb[i].offset, mb[i].size);
 
-		b->buffer.n_metas = SPA_MIN(buffers[i]->n_metas, MAX_METAS);
+		b->buffer.n_metas = buffers[i]->n_metas;
 		for (j = 0; j < b->buffer.n_metas; j++)
 			memcpy(&b->buffer.metas[j], &buffers[i]->metas[j], sizeof(struct spa_meta));
 
-		b->buffer.n_datas = SPA_MIN(buffers[i]->n_datas, MAX_DATAS);
+		b->buffer.n_datas = buffers[i]->n_datas;
 		for (j = 0; j < b->buffer.n_datas; j++) {
 			struct spa_data *d = &buffers[i]->datas[j];
 

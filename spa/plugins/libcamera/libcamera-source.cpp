@@ -42,8 +42,7 @@
 #include <libcamera/framebuffer.h>
 #include <libcamera/framebuffer_allocator.h>
 
-#include "libcamera.h"
-#include "libcamera-manager.hpp"
+#include "libcamera.hpp"
 
 using namespace libcamera;
 
@@ -1219,8 +1218,8 @@ spa_libcamera_alloc_buffers(struct impl *impl, struct port *port,
 	for (uint32_t i = 0; i < n_buffers; i++) {
 		struct buffer *b;
 
-		if (buffers[i]->n_datas < 1) {
-			spa_log_error(impl->log, "invalid buffer data");
+		if (buffers[i]->n_datas != port->buffers_blocks) {
+			spa_log_error(impl->log, "invalid number of data planes");
 			return -EINVAL;
 		}
 
@@ -1243,6 +1242,8 @@ spa_libcamera_alloc_buffers(struct impl *impl, struct port *port,
 		const auto& planes = bufs[i]->planes();
 		spa_data *d = buffers[i]->datas;
 
+		spa_assert(buffers[i]->n_datas <= planes.size());
+
 		for(uint32_t j = 0; j < buffers[i]->n_datas; ++j) {
 			const auto memtype = choose_memtype(d[j].type);
 			if (memtype == SPA_DATA_Invalid) {
@@ -1258,30 +1259,22 @@ spa_libcamera_alloc_buffers(struct impl *impl, struct port *port,
 			d[j].chunk->stride = port->streamConfig.stride;
 			d[j].chunk->flags = 0;
 			/* Update parameters according to the plane information */
-			unsigned int numPlanes = planes.size();
-			if (buffers[i]->n_datas < numPlanes) {
+			if (buffers[i]->n_datas < planes.size()) {
 				if (j < buffers[i]->n_datas - 1) {
 					d[j].maxsize = planes[j].length;
 					d[j].chunk->offset = planes[j].offset;
 					d[j].chunk->size = planes[j].length;
 				} else {
 					d[j].chunk->offset = planes[j].offset;
-					for (uint8_t k = j; k < numPlanes; k++) {
+					for (uint8_t k = j; k < planes.size(); k++) {
 						d[j].maxsize += planes[k].length;
 						d[j].chunk->size += planes[k].length;
 					}
 				}
-			} else if (buffers[i]->n_datas == numPlanes) {
+			} else {
 				d[j].maxsize = planes[j].length;
 				d[j].chunk->offset = planes[j].offset;
 				d[j].chunk->size = planes[j].length;
-			} else {
-				spa_log_warn(impl->log, "buffer index: i: %d, data member "
-					"numbers: %d is greater than plane number: %d",
-					i, buffers[i]->n_datas, numPlanes);
-				d[j].maxsize = port->streamConfig.frameSize;
-				d[j].chunk->offset = 0;
-				d[j].chunk->size = port->streamConfig.frameSize;
 			}
 
 			switch (memtype) {
@@ -1609,6 +1602,8 @@ void emit_node_info(struct impl *impl, bool full)
 		{ SPA_KEY_MEDIA_CLASS, "Video/Source" },
 		{ SPA_KEY_MEDIA_ROLE, "Camera" },
 		{ SPA_KEY_NODE_DRIVER, "true" },
+		{ KEY_VERSION_LIBRARY, libcamera_library_version() },
+		{ KEY_VERSION_HEADER, libcamera_header_version() },
 	};
 	uint64_t old = full ? impl->info.change_mask : 0;
 	if (full)
